@@ -9,7 +9,12 @@ const { chromium } = require('playwright');
   const context = await browser.newContext({
     permissions: ['microphone']
   });
-  
+
+  // Seed a dummy key so the app doesn't open the Settings prompt and blocks the mic.
+  await context.addInitScript(() => {
+    localStorage.setItem('openai_api_key', 'sk-test-dummy-key');
+  });
+
   const page = await context.newPage();
   
   console.log('Navigating to http://localhost:3000...');

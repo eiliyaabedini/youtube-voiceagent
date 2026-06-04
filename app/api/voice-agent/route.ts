@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { OpenAI } from "openai";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 export async function POST(req: NextRequest) {
   try {
+    const apiKey = req.headers.get("x-openai-key");
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "Missing OpenAI API key. Add your key in Settings to use the voice agent." },
+        { status: 401 }
+      );
+    }
+
+    const openai = new OpenAI({ apiKey });
+
     const formData = await req.formData();
     const audioFile = formData.get("file") as File;
     const todosJson = formData.get("todos") as string;

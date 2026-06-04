@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2 } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2, Settings, Key, X, Eye, EyeOff, ExternalLink } from "lucide-react";
+
+const API_KEY_STORAGE = "openai_api_key";
 
 interface Todo {
   id: string;
@@ -20,11 +22,51 @@ export default function Home() {
   const [transcript, setTranscript] = useState("");
   const [assistantText, setAssistantText] = useState("Hello! I am your voice-activated todo agent. Tap the microphone and say something like 'Add review documents' or 'Complete task 1' to manage your list.");
   const [manualInput, setManualInput] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const [showKey, setShowKey] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
+  // Load the user's saved key on first load; prompt for one if it's missing.
+  useEffect(() => {
+    const stored = localStorage.getItem(API_KEY_STORAGE);
+    if (stored) {
+      setApiKey(stored);
+    } else {
+      setShowSettings(true);
+    }
+  }, []);
+
+  const openSettings = () => {
+    setKeyInput(apiKey);
+    setShowKey(false);
+    setShowSettings(true);
+  };
+
+  const saveKey = () => {
+    const trimmed = keyInput.trim();
+    if (!trimmed) return;
+    localStorage.setItem(API_KEY_STORAGE, trimmed);
+    setApiKey(trimmed);
+    setShowSettings(false);
+    setAssistantText("Great, your API key is set! Tap the microphone and tell me what to add to your list.");
+  };
+
+  const clearKey = () => {
+    localStorage.removeItem(API_KEY_STORAGE);
+    setApiKey("");
+    setKeyInput("");
+  };
+
   const startRecording = async () => {
+    if (!apiKey) {
+      setAssistantText("Please add your OpenAI API key in Settings before recording.");
+      openSettings();
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
@@ -63,7 +105,16 @@ export default function Home() {
       formData.append("file", audioBlob, "audio.webm");
       formData.append("todos", JSON.stringify(todos));
 
-      const res = await fetch("/api/voice-agent", { method: "POST", body: formData });
+      const res = await fetch("/api/voice-agent", {
+        method: "POST",
+        headers: { "x-openai-key": apiKey },
+        body: formData,
+      });
+      if (res.status === 401) {
+        setAssistantText("Your OpenAI API key is missing or invalid. Please update it in Settings.");
+        openSettings();
+        return;
+      }
       if (!res.ok) throw new Error("API failed to process audio");
 
       const data = await res.json();
@@ -102,6 +153,7 @@ export default function Home() {
   };
 
   return (
+    <>
     <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-4 sm:p-8">
       <div className="w-full max-w-4xl flex flex-col gap-6">
         <header className="flex items-center justify-between border-b border-slate-800 pb-4">
@@ -111,7 +163,15 @@ export default function Home() {
               VoiceTodo Agent
             </h1>
           </div>
-          <span className="text-xs bg-slate-900 border border-slate-800 text-slate-400 px-3 py-1 rounded-full">Next.js App</span>
+          <button
+            type="button"
+            onClick={openSettings}
+            className="relative flex items-center gap-1.5 text-xs bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            <span>Settings</span>
+            <span className={`h-2 w-2 rounded-full ${apiKey ? "bg-emerald-500" : "bg-amber-500 animate-pulse"}`} />
+          </button>
         </header>
 
         {/* Voice Control Panel */}
@@ -250,5 +310,88 @@ export default function Home() {
         </section>
       </div>
     </main>
+
+    {showSettings && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6 flex flex-col gap-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="bg-indigo-950/60 border border-indigo-800/50 p-2 rounded-lg text-indigo-400">
+                <Key className="h-4 w-4" />
+              </div>
+              <h2 className="text-lg font-semibold text-slate-100">OpenAI API Key</h2>
+            </div>
+            {apiKey && (
+              <button
+                type="button"
+                onClick={() => setShowSettings(false)}
+                className="text-slate-500 hover:text-slate-300 transition"
+                aria-label="Close settings"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            )}
+          </div>
+
+          <p className="text-sm text-slate-400 leading-relaxed">
+            This app uses your own OpenAI key. It is stored only in this browser and sent directly with each request — it is never saved on the server.
+          </p>
+
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Secret Key</label>
+            <div className="relative">
+              <input
+                type={showKey ? "text" : "password"}
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") saveKey(); }}
+                placeholder="sk-..."
+                autoFocus
+                className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl pl-4 pr-10 py-2.5 text-sm outline-none transition font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey(!showKey)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition"
+                aria-label={showKey ? "Hide key" : "Show key"}
+              >
+                {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            <a
+              href="https://platform.openai.com/api-keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition w-fit"
+            >
+              Get an API key <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 pt-1">
+            {apiKey ? (
+              <button
+                type="button"
+                onClick={clearKey}
+                className="text-xs text-slate-500 hover:text-red-400 transition"
+              >
+                Remove key
+              </button>
+            ) : (
+              <span />
+            )}
+            <button
+              type="button"
+              onClick={saveKey}
+              disabled={!keyInput.trim()}
+              className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold rounded-xl px-5 py-2.5 transition"
+            >
+              Save Key
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
