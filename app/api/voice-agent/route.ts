@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     let messages: any[] = [
       {
         role: "system",
-        content: "You are a helpful voice assistant managing a simple todo list. Rely on tool calls to alter the state. Keep conversational responses concise, suitable for TTS."
+        content: "You are a helpful voice assistant managing a simple todo list. Use tool calls to read (listTasks) and change the list (addTask, completeTask, updateTask, deleteTask) — never claim to have done so without a tool call. When the user refers to a task by wording or position (e.g. 'the last one', 'the latest item', 'the coffee task'), match it against the current list and act using that task's exact id. Each task has a createdAt timestamp; the most recently added task has the largest createdAt. Keep conversational responses concise, suitable for TTS."
       },
       {
         role: "user",
@@ -51,6 +51,14 @@ export async function POST(req: NextRequest) {
     ];
 
     const tools: any[] = [
+      {
+        type: "function",
+        function: {
+          name: "listTasks",
+          description: "Read the current todo list (id, text, completed status, createdAt for every task). Call this to answer questions about the list or to resolve a task referred to by name or position before acting on it.",
+          parameters: { type: "object", properties: {}, required: [] }
+        }
+      },
       {
         type: "function",
         function: {
@@ -76,6 +84,21 @@ export async function POST(req: NextRequest) {
               id: { type: "string", description: "The unique ID of the todo item" }
             },
             required: ["id"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "updateTask",
+          description: "Change the text/wording of an existing todo item",
+          parameters: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "The unique ID of the todo item" },
+              text: { type: "string", description: "The new content for the todo item" }
+            },
+            required: ["id", "text"]
           }
         }
       }
@@ -113,13 +136,26 @@ export async function POST(req: NextRequest) {
         const args = JSON.parse(argsString || "{}");
         let result = "";
 
-        if (name === "addTask") {
-          const newTodo = { id: Math.random().toString(36).substring(2, 9), text: args.text, completed: false };
+        if (name === "listTasks") {
+          result = currentTodos.length
+            ? JSON.stringify(currentTodos.map((t: { id: string; text: string; completed: boolean; createdAt?: number }) => ({
+                id: t.id,
+                text: t.text,
+                completed: t.completed,
+                addedAt: t.createdAt ? new Date(t.createdAt).toISOString() : null,
+              })))
+            : "The todo list is empty.";
+        } else if (name === "addTask") {
+          const newTodo = { id: Math.random().toString(36).substring(2, 9), text: args.text, completed: false, createdAt: Date.now() };
           currentTodos.push(newTodo);
           result = `Successfully added: "${args.text}"`;
         } else if (name === "completeTask") {
           const todo = currentTodos.find((t: any) => t.id === args.id);
           if (todo) { todo.completed = true; result = `Completed task ID ${args.id}`; }
+          else { result = `Task ID ${args.id} not found`; }
+        } else if (name === "updateTask") {
+          const todo = currentTodos.find((t: { id: string; text: string }) => t.id === args.id);
+          if (todo) { todo.text = args.text; result = `Updated task ID ${args.id} to "${args.text}"`; }
           else { result = `Task ID ${args.id} not found`; }
         } else if (name === "deleteTask") {
           const len = currentTodos.length;

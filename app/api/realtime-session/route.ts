@@ -5,14 +5,23 @@ import { OpenAI } from "openai";
 // adapted for a live speech-to-speech session.
 const REALTIME_INSTRUCTIONS = [
   "You are a helpful voice assistant managing a simple todo list.",
-  "Rely on the provided tools (addTask, completeTask, deleteTask) to change the list — never claim to have changed it without calling a tool.",
-  "Task IDs are returned to you in the tool results; use those exact IDs when completing or deleting a task.",
+  "Rely on the provided tools (listTasks, addTask, completeTask, updateTask, deleteTask) to read and change the list — never claim to have read or changed it without calling a tool.",
+  "Whenever the user asks what is on the list, or refers to a task by its wording or position (e.g. 'the last one', 'the latest item', 'the coffee task'), first call listTasks to get the current items, then act using the matching task's exact id.",
+  "Each task has an 'addedAt' timestamp; the most recently added task is the one with the latest addedAt (the last entry returned by listTasks).",
+  "Use completeTask to mark done, updateTask to change a task's wording, and deleteTask to remove one — all by id.",
   "Keep spoken replies short, natural, and conversational — one or two sentences.",
 ].join(" ");
 
 // Same three tools as the chained route, but in the flat RealtimeFunctionTool shape
 // ({ type, name, description, parameters }) rather than nested under `function`.
 const REALTIME_TOOLS = [
+  {
+    type: "function" as const,
+    name: "listTasks",
+    description:
+      "Read the current todo list. Returns every task with its id, text, completed status, and addedAt timestamp (oldest first, so the last entry is the most recently added). Call this before completing, updating, or deleting a task referred to by name or position.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
   {
     type: "function" as const,
     name: "addTask",
@@ -35,6 +44,19 @@ const REALTIME_TOOLS = [
         id: { type: "string", description: "The unique ID of the todo item" },
       },
       required: ["id"],
+    },
+  },
+  {
+    type: "function" as const,
+    name: "updateTask",
+    description: "Change the text/wording of an existing todo item",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The unique ID of the todo item" },
+        text: { type: "string", description: "The new content for the todo item" },
+      },
+      required: ["id", "text"],
     },
   },
   {

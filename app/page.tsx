@@ -10,8 +10,8 @@ type Mode = "chained" | "realtime";
 
 export default function Home() {
   const [todos, setTodos] = useState<Todo[]>([
-    { id: "1", text: "Welcome to Voice Todo!", completed: false },
-    { id: "2", text: "Try saying: 'Add buy some coffee'", completed: false }
+    { id: "1", text: "Welcome to Voice Todo!", completed: false, createdAt: 1 },
+    { id: "2", text: "Try saying: 'Add buy some coffee'", completed: false, createdAt: 2 }
   ]);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -202,7 +202,7 @@ export default function Home() {
   const addManualTask = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualInput.trim()) return;
-    setTodos([...todos, { id: Math.random().toString(36).substring(2, 9), text: manualInput.trim(), completed: false }]);
+    setTodos([...todos, { id: Math.random().toString(36).substring(2, 9), text: manualInput.trim(), completed: false, createdAt: Date.now() }]);
     setManualInput("");
   };
 

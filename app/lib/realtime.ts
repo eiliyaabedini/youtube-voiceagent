@@ -9,6 +9,8 @@ export interface Todo {
   id: string;
   text: string;
   completed: boolean;
+  // Epoch ms when the item was added — lets the agent resolve "the last/latest item".
+  createdAt: number;
 }
 
 export type RealtimeStatus = "idle" | "connecting" | "live" | "speaking";
@@ -35,6 +37,20 @@ export class RealtimeAuthError extends Error {}
 
 const newId = () => Math.random().toString(36).substring(2, 9);
 
+// Serialize the list for the model: ids (so it can act), text, status, and added
+// time. Ordered oldest→newest so "the last item" is the final entry.
+export function summarizeTodos(todos: Todo[]): string {
+  if (todos.length === 0) return "The todo list is empty.";
+  return JSON.stringify(
+    todos.map((t) => ({
+      id: t.id,
+      text: t.text,
+      completed: t.completed,
+      addedAt: new Date(t.createdAt).toISOString(),
+    }))
+  );
+}
+
 // Apply a tool call to the current list and return a human-readable result string
 // (mirrors the server-side logic in app/api/voice-agent/route.ts).
 function executeTool(
@@ -45,8 +61,12 @@ function executeTool(
 ): string {
   const todos = getTodos();
 
+  if (name === "listTasks") {
+    return summarizeTodos(todos);
+  }
+
   if (name === "addTask") {
-    const next = [...todos, { id: newId(), text: args.text, completed: false }];
+    const next = [...todos, { id: newId(), text: args.text, completed: false, createdAt: Date.now() }];
     setTodos(next);
     return `Successfully added: "${args.text}"`;
   }
@@ -55,6 +75,12 @@ function executeTool(
     if (!todos.some((t) => t.id === args.id)) return `Task ID ${args.id} not found`;
     setTodos(todos.map((t) => (t.id === args.id ? { ...t, completed: true } : t)));
     return `Completed task ID ${args.id}`;
+  }
+
+  if (name === "updateTask") {
+    if (!todos.some((t) => t.id === args.id)) return `Task ID ${args.id} not found`;
+    setTodos(todos.map((t) => (t.id === args.id ? { ...t, text: args.text } : t)));
+    return `Updated task ID ${args.id} to "${args.text}"`;
   }
 
   if (name === "deleteTask") {
