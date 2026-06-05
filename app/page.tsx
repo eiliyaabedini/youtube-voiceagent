@@ -1,15 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2, Settings, Key, X, Eye, EyeOff, ExternalLink } from "lucide-react";
+import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2, Settings, Key, X, Eye, EyeOff, ExternalLink, Radio, Zap } from "lucide-react";
+import { connectRealtime, RealtimeAuthError, type Todo, type RealtimeController, type RealtimeStatus } from "./lib/realtime";
 
 const API_KEY_STORAGE = "openai_api_key";
 
-interface Todo {
-  id: string;
-  text: string;
-  completed: boolean;
-}
+type Mode = "chained" | "realtime";
 
 export default function Home() {
   const [todos, setTodos] = useState<Todo[]>([
@@ -26,9 +23,17 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   const [keyInput, setKeyInput] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [mode, setMode] = useState<Mode>("chained");
+  const [rtStatus, setRtStatus] = useState<RealtimeStatus>("idle");
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const rtControllerRef = useRef<RealtimeController | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  // Keep a ref in sync with todos so the long-lived realtime data-channel handler
+  // always reads the current list instead of a stale closure snapshot.
+  const todosRef = useRef<Todo[]>(todos);
+  useEffect(() => { todosRef.current = todos; }, [todos]);
 
   // Load the user's saved key on first load; prompt for one if it's missing.
   useEffect(() => {
@@ -98,6 +103,63 @@ export default function Home() {
     }
   };
 
+  const stopRealtime = () => {
+    rtControllerRef.current?.stop();
+    rtControllerRef.current = null;
+    setRtStatus("idle");
+  };
+
+  // Tear down any live realtime session on unmount.
+  useEffect(() => () => stopRealtime(), []);
+
+  // Lazily open the realtime session on the first mic tap; tap again to disconnect.
+  const toggleRealtime = async () => {
+    if (rtControllerRef.current) {
+      stopRealtime();
+      return;
+    }
+    if (!apiKey) {
+      setAssistantText("Please add your OpenAI API key in Settings before recording.");
+      openSettings();
+      return;
+    }
+    // Don't let two mic captures coexist.
+    stopRecording();
+    const audioEl = remoteAudioRef.current;
+    if (!audioEl) return;
+    try {
+      setRtStatus("connecting");
+      const controller = await connectRealtime({
+        apiKey,
+        audioEl,
+        getTodos: () => todosRef.current,
+        setTodos,
+        onStatus: setRtStatus,
+        onTranscript: setTranscript,
+        onAssistantText: setAssistantText,
+        onError: (m) => setAssistantText(m),
+      });
+      rtControllerRef.current = controller;
+    } catch (err) {
+      stopRealtime();
+      if (err instanceof RealtimeAuthError) {
+        setAssistantText("Your OpenAI API key is missing or invalid. Please update it in Settings.");
+        openSettings();
+      } else {
+        console.error("Realtime error:", err);
+        setAssistantText("Sorry, I couldn't start the realtime session.");
+      }
+    }
+  };
+
+  const switchMode = (next: Mode) => {
+    if (next === mode) return;
+    // Leaving realtime: drop the live session. Leaving chained: stop any recording.
+    if (next === "chained") stopRealtime();
+    if (next === "realtime") stopRecording();
+    setMode(next);
+  };
+
   const sendVoiceRequest = async (audioBlob: Blob) => {
     setIsProcessing(true);
     try {
@@ -152,9 +214,13 @@ export default function Home() {
     setTodos(todos.filter(t => t.id !== id));
   };
 
+  const rtConnecting = rtStatus === "connecting";
+  const rtActive = rtStatus === "live" || rtStatus === "speaking";
+
   return (
     <>
     <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-4 sm:p-8">
+      <audio ref={remoteAudioRef} autoPlay className="hidden" />
       <div className="w-full max-w-4xl flex flex-col gap-6">
         <header className="flex items-center justify-between border-b border-slate-800 pb-4">
           <div className="flex items-center gap-2">
@@ -177,33 +243,92 @@ export default function Home() {
         {/* Voice Control Panel */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="md:col-span-1 bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col items-center justify-between gap-6 min-h-[300px]">
-            <h2 className="text-lg font-semibold text-slate-200 self-start">Voice Control</h2>
+            <div className="flex flex-col gap-3 w-full">
+              <h2 className="text-lg font-semibold text-slate-200">Voice Control</h2>
+              {/* Mode switch: existing chained pipeline vs. gpt-realtime-2 live session */}
+              <div className="flex bg-slate-950 border border-slate-800 rounded-full p-1 text-xs font-medium">
+                <button
+                  type="button"
+                  onClick={() => switchMode("chained")}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full transition ${
+                    mode === "chained" ? "bg-slate-800 text-slate-100" : "text-slate-500 hover:text-slate-300"
+                  }`}
+                >
+                  <Mic className="h-3.5 w-3.5" />
+                  <span>Chained</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchMode("realtime")}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full transition ${
+                    mode === "realtime" ? "bg-indigo-600 text-white" : "text-slate-500 hover:text-slate-300"
+                  }`}
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  <span>Realtime</span>
+                </button>
+              </div>
+            </div>
             <div className="flex flex-col items-center gap-4">
-              <button
-                type="button"
-                onClick={isRecording ? stopRecording : startRecording}
-                disabled={isProcessing}
-                className={`h-24 w-24 rounded-full flex items-center justify-center border-4 transition-all duration-300 shadow-lg ${
-                  isRecording
-                    ? "bg-red-500 border-red-400 hover:bg-red-600 animate-pulse scale-105 shadow-red-900/40"
-                    : isProcessing
-                    ? "bg-slate-800 border-slate-700 cursor-not-allowed"
-                    : "bg-emerald-600 border-emerald-500 hover:bg-emerald-700 shadow-emerald-900/20"
-                }`}
-              >
-                {isProcessing ? (
-                  <Loader2 className="h-10 w-10 text-slate-400 animate-spin" />
-                ) : isRecording ? (
-                  <Square className="h-10 w-10 text-white fill-white" />
-                ) : (
-                  <Mic className="h-10 w-10 text-white" />
-                )}
-              </button>
+              {mode === "chained" ? (
+                <button
+                  type="button"
+                  onClick={isRecording ? stopRecording : startRecording}
+                  disabled={isProcessing}
+                  className={`h-24 w-24 rounded-full flex items-center justify-center border-4 transition-all duration-300 shadow-lg ${
+                    isRecording
+                      ? "bg-red-500 border-red-400 hover:bg-red-600 animate-pulse scale-105 shadow-red-900/40"
+                      : isProcessing
+                      ? "bg-slate-800 border-slate-700 cursor-not-allowed"
+                      : "bg-emerald-600 border-emerald-500 hover:bg-emerald-700 shadow-emerald-900/20"
+                  }`}
+                >
+                  {isProcessing ? (
+                    <Loader2 className="h-10 w-10 text-slate-400 animate-spin" />
+                  ) : isRecording ? (
+                    <Square className="h-10 w-10 text-white fill-white" />
+                  ) : (
+                    <Mic className="h-10 w-10 text-white" />
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={toggleRealtime}
+                  disabled={rtConnecting}
+                  className={`h-24 w-24 rounded-full flex items-center justify-center border-4 transition-all duration-300 shadow-lg ${
+                    rtConnecting
+                      ? "bg-slate-800 border-slate-700 cursor-not-allowed"
+                      : rtActive
+                      ? "bg-red-500 border-red-400 hover:bg-red-600 animate-pulse scale-105 shadow-red-900/40"
+                      : "bg-indigo-600 border-indigo-500 hover:bg-indigo-700 shadow-indigo-900/20"
+                  }`}
+                >
+                  {rtConnecting ? (
+                    <Loader2 className="h-10 w-10 text-slate-400 animate-spin" />
+                  ) : rtActive ? (
+                    <Square className="h-10 w-10 text-white fill-white" />
+                  ) : (
+                    <Radio className="h-10 w-10 text-white" />
+                  )}
+                </button>
+              )}
               <div className="text-center">
-                <p className={`text-sm font-medium ${isRecording ? "text-red-400 font-semibold" : "text-slate-400"}`}>
-                  {isRecording ? "Recording Audio..." : isProcessing ? "Processing State..." : "Ready to Talk"}
-                </p>
-                <p className="text-xs text-slate-500 mt-1">Tap button to toggle</p>
+                {mode === "chained" ? (
+                  <>
+                    <p className={`text-sm font-medium ${isRecording ? "text-red-400 font-semibold" : "text-slate-400"}`}>
+                      {isRecording ? "Recording Audio..." : isProcessing ? "Processing State..." : "Ready to Talk"}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">Tap button to toggle</p>
+                  </>
+                ) : (
+                  <>
+                    <p className={`text-sm font-medium ${rtActive ? "text-indigo-400 font-semibold" : "text-slate-400"}`}>
+                      {rtConnecting ? "Connecting..." : rtActive ? "Live — just talk" : "Tap to go live"}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">{rtActive ? "Tap to end session" : "Realtime speech-to-speech"}</p>
+                  </>
+                )}
               </div>
             </div>
 
@@ -211,6 +336,22 @@ export default function Home() {
               <div className="flex items-center gap-2 bg-indigo-950/40 border border-indigo-900/50 px-4 py-2 rounded-xl w-full justify-center text-xs text-indigo-400">
                 <Volume2 className="h-4 w-4 animate-bounce" />
                 <span>Assistant is speaking...</span>
+              </div>
+            )}
+
+            {mode === "realtime" && rtActive && (
+              <div className="flex items-center gap-2 bg-indigo-950/40 border border-indigo-900/50 px-4 py-2 rounded-xl w-full justify-center text-xs text-indigo-400">
+                {rtStatus === "speaking" ? (
+                  <>
+                    <Volume2 className="h-4 w-4 animate-bounce" />
+                    <span>Assistant is speaking...</span>
+                  </>
+                ) : (
+                  <>
+                    <Radio className="h-4 w-4 animate-pulse" />
+                    <span>Listening — speak anytime</span>
+                  </>
+                )}
               </div>
             )}
           </div>
