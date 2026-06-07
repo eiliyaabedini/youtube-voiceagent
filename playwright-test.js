@@ -34,7 +34,7 @@ const { chromium } = require('playwright');
   console.log(`Verified added task: "${taskText}"`);
   
   console.log('Testing Microphone button...');
-  const micButton = page.locator('button.rounded-full');
+  const micButton = page.locator('button.h-24.w-24');
   await micButton.click();
   await page.waitForTimeout(500);
   const statusText = await page.locator('p.font-medium').innerText();

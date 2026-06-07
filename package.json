@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@heygen/liveavatar-web-sdk": "^0.0.18",
     "lucide-react": "^1.17.0",
     "next": "16.2.7",
     "openai": "^6.42.0",

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { OpenAI } from "openai";
 
+// Copy of app/api/voice-agent/route.ts (the "chained" pipeline) used by the Avatar
+// tab. It is intentionally a separate copy so the Avatar tab's speech-to-text can be
+// upgraded to realtime models later without touching the chained route. The ONLY
+// difference from voice-agent is the TTS call: it requests raw PCM (24kHz/16-bit/mono)
+// instead of MP3, because the client streams that audio to the HeyGen LiveAvatar via
+// the SDK's repeatAudio(). This route never talks to HeyGen.
 export async function POST(req: NextRequest) {
   try {
     const apiKey = req.headers.get("x-openai-key");
@@ -180,15 +186,18 @@ export async function POST(req: NextRequest) {
 
     const textResponse = assistantMessage.content || "I have updated your todo list.";
 
-    // 3. OpenAI Text-to-Speech API (using gpt-4o-mini-tts-2025-12-15)
+    // 3. OpenAI Text-to-Speech (gpt-4o-mini-tts-2025-12-15), requested as raw PCM so the
+    //    client can hand it to the HeyGen LiveAvatar via repeatAudio(). HeyGen LITE mode
+    //    expects PCM 16-bit signed LE, 24kHz, mono — which is exactly OpenAI's `pcm` output.
     let audioBase64 = "";
     try {
-      const mp3 = await openai.audio.speech.create({
+      const speech = await openai.audio.speech.create({
         model: "gpt-4o-mini-tts-2025-12-15",
         voice: "ash",
         input: textResponse,
+        response_format: "pcm",
       });
-      const audioBuffer = Buffer.from(await mp3.arrayBuffer());
+      const audioBuffer = Buffer.from(await speech.arrayBuffer());
       audioBase64 = audioBuffer.toString("base64");
     } catch (ttsErr: any) {
       console.error("[OpenAI TTS Error] Speech generation failed:", ttsErr);
@@ -201,7 +210,7 @@ export async function POST(req: NextRequest) {
       audioBase64: audioBase64
     });
   } catch (error: any) {
-    console.error("Error in voice-agent api:", error);
+    console.error("Error in avatar-agent api:", error);
     return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 });
   }
 }
