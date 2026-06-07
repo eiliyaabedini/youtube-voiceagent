@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { OpenAI } from "openai";
 
-// Copy of app/api/voice-agent/route.ts (the "chained" pipeline) used by the Avatar
-// tab. It is intentionally a separate copy so the Avatar tab's speech-to-text can be
-// upgraded to realtime models later without touching the chained route. The ONLY
-// difference from voice-agent is the TTS call: it requests raw PCM (24kHz/16-bit/mono)
-// instead of MP3, because the client streams that audio to the HeyGen LiveAvatar via
-// the SDK's repeatAudio(). This route never talks to HeyGen.
+// Avatar tab pipeline. Diverged from voice-agent: the Avatar tab transcribes speech
+// live via a gpt-realtime-whisper Realtime session on the client (app/lib/transcribe.ts),
+// so this route receives the finished transcript TEXT as JSON (no audio upload, no batch
+// STT step) — that's the latency win. Everything after is the same chained tool-calling
+// pipeline, except the TTS call requests raw PCM (24kHz/16-bit/mono) so the client can
+// stream it to the HeyGen LiveAvatar via repeatAudio(). This route never talks to HeyGen.
 export async function POST(req: NextRequest) {
   try {
     const apiKey = req.headers.get("x-openai-key");
@@ -19,32 +19,15 @@ export async function POST(req: NextRequest) {
 
     const openai = new OpenAI({ apiKey });
 
-    const formData = await req.formData();
-    const audioFile = formData.get("file") as File;
-    const todosJson = formData.get("todos") as string;
+    const body = await req.json().catch(() => ({} as any));
+    const transcribedText: string = typeof body.transcript === "string" ? body.transcript : "";
+    let currentTodos = Array.isArray(body.todos) ? body.todos : [];
 
-    if (!audioFile) {
-      return NextResponse.json({ error: "Missing audio file" }, { status: 400 });
+    if (!transcribedText.trim()) {
+      return NextResponse.json({ error: "Missing transcript" }, { status: 400 });
     }
 
-    let currentTodos = [];
-    if (todosJson) {
-      try {
-        currentTodos = JSON.parse(todosJson);
-      } catch (e) {
-        currentTodos = [];
-      }
-    }
-
-    // 1. Transcription using gpt-4o-mini-transcribe-2025-12-15
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioFile,
-      model: "gpt-4o-mini-transcribe-2025-12-15",
-    });
-
-    const transcribedText = transcription.text;
-
-    // 2. Chat completion with gpt-5.4-mini-2026-03-17 for tool calling
+    // Chat completion with gpt-5.4-mini-2026-03-17 for tool calling
     let messages: any[] = [
       {
         role: "system",
