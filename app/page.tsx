@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2, Settings, Key, X, Eye, EyeOff, ExternalLink, Radio, Zap, Video } from "lucide-react";
 import { connectRealtime, RealtimeAuthError, type Todo, type RealtimeController, type RealtimeStatus } from "./lib/realtime";
 import { connectAvatar, AvatarAuthError, type AvatarController, type AvatarStatus } from "./lib/avatar";
+import { connectTranscribe, TranscribeAuthError, type TranscribeController } from "./lib/transcribe";
 
 const API_KEY_STORAGE = "openai_api_key";
 const HEYGEN_KEY_STORAGE = "heygen_api_key";
@@ -31,11 +32,14 @@ export default function Home() {
   const [mode, setMode] = useState<Mode>("chained");
   const [rtStatus, setRtStatus] = useState<RealtimeStatus>("idle");
   const [avStatus, setAvStatus] = useState<AvatarStatus>("idle");
+  const [avListening, setAvListening] = useState(false);
+  const [txReady, setTxReady] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const rtControllerRef = useRef<RealtimeController | null>(null);
   const avControllerRef = useRef<AvatarController | null>(null);
+  const txControllerRef = useRef<TranscribeController | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const avatarVideoRef = useRef<HTMLVideoElement | null>(null);
   // Keep a ref in sync with todos so the long-lived realtime data-channel handler
@@ -110,11 +114,7 @@ export default function Home() {
 
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        if (mode === "avatar") {
-          await sendAvatarRequest(audioBlob);
-        } else {
-          await sendVoiceRequest(audioBlob);
-        }
+        await sendVoiceRequest(audioBlob);
       };
 
       mediaRecorder.start();
@@ -142,7 +142,11 @@ export default function Home() {
   const stopAvatar = () => {
     avControllerRef.current?.stop();
     avControllerRef.current = null;
+    txControllerRef.current?.stop();
+    txControllerRef.current = null;
     setAvStatus("idle");
+    setAvListening(false);
+    setTxReady(false);
   };
 
   // Tear down any live session on unmount.
@@ -210,19 +214,31 @@ export default function Home() {
     if (!videoEl) return;
     try {
       setAvStatus("connecting");
+      // 1. HeyGen avatar (video out).
       const controller = await connectAvatar({
         heygenKey,
         videoEl,
         onStatus: setAvStatus,
         onError: (m) => setAssistantText(m),
-        // Session ended on its own (e.g. sandbox cap) — drop the ref so a tap reconnects.
-        onClosed: () => { avControllerRef.current = null; },
+        // Session ended on its own (e.g. sandbox cap) — tear down both and let a tap reconnect.
+        onClosed: () => { stopAvatar(); },
       });
       avControllerRef.current = controller;
+      // 2. gpt-realtime-whisper transcription (mic in). Push-to-talk is gated on txReady.
+      const transcriber = await connectTranscribe({
+        apiKey,
+        onStatus: (s) => setTxReady(s === "ready"),
+        onPartial: (t) => setTranscript(t),
+        onError: (m) => setAssistantText(m),
+      });
+      txControllerRef.current = transcriber;
     } catch (err) {
       stopAvatar();
       if (err instanceof AvatarAuthError) {
         setAssistantText("Your HeyGen API key is missing or invalid. Please update it in Settings.");
+        openSettings();
+      } else if (err instanceof TranscribeAuthError) {
+        setAssistantText("Your OpenAI API key is missing or invalid. Please update it in Settings.");
         openSettings();
       } else {
         console.error("Avatar error:", err);
@@ -279,42 +295,57 @@ export default function Home() {
     }
   };
 
-  // Avatar mode: same chained brain (POST /api/avatar-agent), but the reply audio is
-  // PCM that we hand to the live avatar via repeatAudio() instead of playing an <audio>.
-  const sendAvatarRequest = async (audioBlob: Blob) => {
+  // Avatar push-to-talk. The mic is owned by the live gpt-realtime-whisper session, so a
+  // tap clears the buffer to start, and the next tap commits + resolves the transcript.
+  const startAvatarUtterance = () => {
+    if (!txControllerRef.current || isProcessing) return;
+    setTranscript("");
+    txControllerRef.current.startUtterance();
+    setAvListening(true);
+  };
+
+  const endAvatarUtterance = async () => {
+    const tx = txControllerRef.current;
+    if (!tx) return;
+    setAvListening(false);
     setIsProcessing(true);
     try {
-      const formData = new FormData();
-      formData.append("file", audioBlob, "audio.webm");
-      formData.append("todos", JSON.stringify(todos));
-
-      const res = await fetch("/api/avatar-agent", {
-        method: "POST",
-        headers: { "x-openai-key": apiKey },
-        body: formData,
-      });
-      if (res.status === 401) {
-        setAssistantText("Your OpenAI API key is missing or invalid. Please update it in Settings.");
-        openSettings();
+      const transcript = (await tx.endUtterance()).trim();
+      if (!transcript) {
+        setAssistantText("I didn't catch that — tap and try again.");
         return;
       }
-      if (!res.ok) throw new Error("API failed to process audio");
-
-      const data = await res.json();
-      if (data.transcript) setTranscript(data.transcript);
-      if (data.assistantText) setAssistantText(data.assistantText);
-      if (data.todos) setTodos(data.todos);
-
-      // Speak the reply through the live avatar. If the session dropped meanwhile,
-      // the text/list still update; only the spoken audio is skipped.
-      if (data.audioBase64 && avControllerRef.current) {
-        avControllerRef.current.speak(data.audioBase64);
-      }
+      setTranscript(transcript);
+      await sendAvatarText(transcript);
     } catch (err) {
-      console.error("Avatar API error:", err);
-      setAssistantText("Sorry, I had an error processing that voice instruction.");
+      console.error("Avatar utterance error:", err);
+      setAssistantText("Sorry, I had an error with that command.");
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  // Send the finished transcript to the avatar brain (tool-calls + PCM TTS); the reply
+  // audio is spoken by the live avatar via repeatAudio() instead of an <audio> element.
+  const sendAvatarText = async (transcript: string) => {
+    const res = await fetch("/api/avatar-agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-openai-key": apiKey },
+      body: JSON.stringify({ transcript, todos }),
+    });
+    if (res.status === 401) {
+      setAssistantText("Your OpenAI API key is missing or invalid. Please update it in Settings.");
+      openSettings();
+      return;
+    }
+    if (!res.ok) throw new Error("avatar-agent failed");
+
+    const data = await res.json();
+    if (data.assistantText) setAssistantText(data.assistantText);
+    if (data.todos) setTodos(data.todos);
+    // If the avatar session dropped meanwhile, the list/text still update; audio is skipped.
+    if (data.audioBase64 && avControllerRef.current) {
+      avControllerRef.current.speak(data.audioBase64);
     }
   };
 
@@ -490,17 +521,17 @@ export default function Home() {
                 )}
               </div>
 
-              {/* Avatar mode: push-to-talk to issue a command while the session is live */}
+              {/* Avatar mode: push-to-talk (live gpt-realtime-whisper) while the session is live */}
               {mode === "avatar" && (
                 <div className="flex flex-col items-center gap-2 w-full border-t border-slate-800 pt-4">
                   <button
                     type="button"
-                    onClick={isRecording ? stopRecording : startRecording}
-                    disabled={!avLive || isProcessing}
+                    onClick={avListening ? endAvatarUtterance : startAvatarUtterance}
+                    disabled={!avLive || !txReady || isProcessing}
                     className={`h-16 w-16 rounded-full flex items-center justify-center border-4 transition-all duration-300 ${
-                      !avLive
+                      !avLive || !txReady
                         ? "bg-slate-800 border-slate-700 cursor-not-allowed opacity-50"
-                        : isRecording
+                        : avListening
                         ? "bg-red-500 border-red-400 hover:bg-red-600 animate-pulse"
                         : isProcessing
                         ? "bg-slate-800 border-slate-700 cursor-not-allowed"
@@ -509,14 +540,14 @@ export default function Home() {
                   >
                     {isProcessing ? (
                       <Loader2 className="h-7 w-7 text-slate-400 animate-spin" />
-                    ) : isRecording ? (
+                    ) : avListening ? (
                       <Square className="h-7 w-7 text-white fill-white" />
                     ) : (
                       <Mic className="h-7 w-7 text-white" />
                     )}
                   </button>
                   <p className="text-xs text-slate-500">
-                    {!avLive ? "Go live to talk" : isRecording ? "Recording… tap to send" : isProcessing ? "Thinking…" : "Tap to speak a command"}
+                    {!avLive ? "Go live to talk" : !txReady ? "Preparing mic…" : avListening ? "Listening… tap to send" : isProcessing ? "Thinking…" : "Tap to speak a command"}
                   </p>
                 </div>
               )}
