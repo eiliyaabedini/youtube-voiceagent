@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2, Settings, Key, X, Eye, EyeOff, ExternalLink, Radio, Zap, Video } from "lucide-react";
+import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2, Settings, Key, X, Eye, EyeOff, ExternalLink, Radio, Video, Power } from "lucide-react";
 import { connectRealtime, RealtimeAuthError, type Todo, type RealtimeController, type RealtimeStatus } from "./lib/realtime";
 import { connectAvatar, AvatarAuthError, type AvatarController, type AvatarStatus } from "./lib/avatar";
 import { connectTranscribe, TranscribeAuthError, type TranscribeController } from "./lib/transcribe";
@@ -194,11 +194,9 @@ export default function Home() {
 
   // Lazily open the avatar session on the first "go live" tap; tap again to disconnect.
   // The session persists across commands; the push-to-talk mic drives each request.
-  const toggleAvatar = async () => {
-    if (avControllerRef.current) {
-      stopAvatar();
-      return;
-    }
+  // Connect the avatar (video) + transcription (mic) sessions. Once live, the same big
+  // control becomes a push-to-talk mic; the separate "End session" button tears it down.
+  const startAvatarSession = async () => {
     if (!apiKey || !heygenKey) {
       setAssistantText(
         !apiKey
@@ -245,6 +243,14 @@ export default function Home() {
         setAssistantText("Sorry, I couldn't start the avatar session.");
       }
     }
+  };
+
+  // One control drives the whole avatar flow: go live → tap to speak → tap to send.
+  // (Disabled in between states, so this only fires when an action is valid.)
+  const handleAvatarTap = () => {
+    if (!avControllerRef.current) { startAvatarSession(); return; }
+    if (avListening) { endAvatarUtterance(); return; }
+    startAvatarUtterance();
   };
 
   const switchMode = (next: Mode) => {
@@ -368,6 +374,11 @@ export default function Home() {
   const rtActive = rtStatus === "live" || rtStatus === "speaking";
   const avConnecting = avStatus === "connecting";
   const avLive = avStatus === "live" || avStatus === "speaking";
+  const avIdle = avStatus === "idle";
+  const avSpeaking = avStatus === "speaking";
+  // The single avatar control is actionable as a push-to-talk mic only when the session
+  // is live, the mic is ready, and nothing is in flight.
+  const avTalkReady = avLive && txReady && !isProcessing && !avSpeaking;
 
   return (
     <>
@@ -402,32 +413,29 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => switchMode("chained")}
-                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full transition ${
+                  className={`flex-1 min-w-0 truncate text-center px-2 py-1.5 rounded-full transition ${
                     mode === "chained" ? "bg-slate-800 text-slate-100" : "text-slate-500 hover:text-slate-300"
                   }`}
                 >
-                  <Mic className="h-3.5 w-3.5" />
-                  <span>Chained</span>
+                  Chained
                 </button>
                 <button
                   type="button"
                   onClick={() => switchMode("realtime")}
-                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full transition ${
+                  className={`flex-1 min-w-0 truncate text-center px-2 py-1.5 rounded-full transition ${
                     mode === "realtime" ? "bg-indigo-600 text-white" : "text-slate-500 hover:text-slate-300"
                   }`}
                 >
-                  <Zap className="h-3.5 w-3.5" />
-                  <span>Realtime</span>
+                  Realtime
                 </button>
                 <button
                   type="button"
                   onClick={() => switchMode("avatar")}
-                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full transition ${
+                  className={`flex-1 min-w-0 truncate text-center px-2 py-1.5 rounded-full transition ${
                     mode === "avatar" ? "bg-cyan-600 text-white" : "text-slate-500 hover:text-slate-300"
                   }`}
                 >
-                  <Video className="h-3.5 w-3.5" />
-                  <span>Avatar</span>
+                  Avatar
                 </button>
               </div>
             </div>
@@ -477,22 +485,28 @@ export default function Home() {
               ) : (
                 <button
                   type="button"
-                  onClick={toggleAvatar}
-                  disabled={avConnecting}
+                  onClick={handleAvatarTap}
+                  disabled={!(avIdle || avTalkReady || avListening)}
                   className={`h-24 w-24 rounded-full flex items-center justify-center border-4 transition-all duration-300 shadow-lg ${
-                    avConnecting
-                      ? "bg-slate-800 border-slate-700 cursor-not-allowed"
-                      : avLive
+                    avListening
                       ? "bg-red-500 border-red-400 hover:bg-red-600 animate-pulse scale-105 shadow-red-900/40"
-                      : "bg-cyan-600 border-cyan-500 hover:bg-cyan-700 shadow-cyan-900/20"
+                      : avTalkReady
+                      ? "bg-emerald-600 border-emerald-500 hover:bg-emerald-700 shadow-emerald-900/20"
+                      : avIdle
+                      ? "bg-cyan-600 border-cyan-500 hover:bg-cyan-700 shadow-cyan-900/20"
+                      : "bg-slate-800 border-slate-700 cursor-not-allowed"
                   }`}
                 >
-                  {avConnecting ? (
+                  {avConnecting || isProcessing ? (
                     <Loader2 className="h-10 w-10 text-slate-400 animate-spin" />
-                  ) : avLive ? (
+                  ) : avSpeaking ? (
+                    <Volume2 className="h-10 w-10 text-cyan-300 animate-pulse" />
+                  ) : avListening ? (
                     <Square className="h-10 w-10 text-white fill-white" />
-                  ) : (
+                  ) : avIdle ? (
                     <Video className="h-10 w-10 text-white" />
+                  ) : (
+                    <Mic className="h-10 w-10 text-white" />
                   )}
                 </button>
               )}
@@ -513,43 +527,44 @@ export default function Home() {
                   </>
                 ) : (
                   <>
-                    <p className={`text-sm font-medium ${avLive ? "text-cyan-400 font-semibold" : "text-slate-400"}`}>
-                      {avConnecting ? "Connecting..." : avLive ? "Live — avatar ready" : "Tap to go live"}
+                    <p className={`text-sm font-medium ${avListening ? "text-red-400 font-semibold" : avTalkReady ? "text-emerald-400 font-semibold" : "text-slate-400"}`}>
+                      {avIdle
+                        ? "Tap to go live"
+                        : avConnecting
+                        ? "Connecting…"
+                        : !txReady
+                        ? "Preparing mic…"
+                        : avSpeaking
+                        ? "Avatar speaking…"
+                        : isProcessing
+                        ? "Thinking…"
+                        : avListening
+                        ? "Listening… tap to send"
+                        : "Tap to speak"}
                     </p>
-                    <p className="text-xs text-slate-500 mt-1">{avLive ? "Tap to end session" : "HeyGen avatar (LITE)"}</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {avIdle
+                        ? "HeyGen avatar · realtime STT"
+                        : avListening
+                        ? "Tap when you're done"
+                        : avTalkReady
+                        ? "Tap, speak, tap to send"
+                        : " "}
+                    </p>
                   </>
                 )}
               </div>
 
-              {/* Avatar mode: push-to-talk (live gpt-realtime-whisper) while the session is live */}
-              {mode === "avatar" && (
-                <div className="flex flex-col items-center gap-2 w-full border-t border-slate-800 pt-4">
-                  <button
-                    type="button"
-                    onClick={avListening ? endAvatarUtterance : startAvatarUtterance}
-                    disabled={!avLive || !txReady || isProcessing}
-                    className={`h-16 w-16 rounded-full flex items-center justify-center border-4 transition-all duration-300 ${
-                      !avLive || !txReady
-                        ? "bg-slate-800 border-slate-700 cursor-not-allowed opacity-50"
-                        : avListening
-                        ? "bg-red-500 border-red-400 hover:bg-red-600 animate-pulse"
-                        : isProcessing
-                        ? "bg-slate-800 border-slate-700 cursor-not-allowed"
-                        : "bg-emerald-600 border-emerald-500 hover:bg-emerald-700"
-                    }`}
-                  >
-                    {isProcessing ? (
-                      <Loader2 className="h-7 w-7 text-slate-400 animate-spin" />
-                    ) : avListening ? (
-                      <Square className="h-7 w-7 text-white fill-white" />
-                    ) : (
-                      <Mic className="h-7 w-7 text-white" />
-                    )}
-                  </button>
-                  <p className="text-xs text-slate-500">
-                    {!avLive ? "Go live to talk" : !txReady ? "Preparing mic…" : avListening ? "Listening… tap to send" : isProcessing ? "Thinking…" : "Tap to speak a command"}
-                  </p>
-                </div>
+              {/* End the live session — clearly secondary to the talk button above. */}
+              {mode === "avatar" && !avIdle && (
+                <button
+                  type="button"
+                  onClick={stopAvatar}
+                  className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-red-400 border border-slate-800 hover:border-red-900/60 rounded-full px-3 py-1.5 transition"
+                >
+                  <Power className="h-3.5 w-3.5" />
+                  <span>End session</span>
+                </button>
               )}
             </div>
 
