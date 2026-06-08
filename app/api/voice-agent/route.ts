@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { OpenAI } from "openai";
+import { searchKnowledge } from "@/app/lib/chroma";
+
+const KB_NAMESPACE = "default";
 
 export async function POST(req: NextRequest) {
   try {
@@ -42,7 +45,7 @@ export async function POST(req: NextRequest) {
     let messages: any[] = [
       {
         role: "system",
-        content: "You are a helpful voice assistant managing a simple todo list. Use tool calls to read (listTasks) and change the list (addTask, completeTask, updateTask, deleteTask) — never claim to have done so without a tool call. When the user refers to a task by wording or position (e.g. 'the last one', 'the latest item', 'the coffee task'), match it against the current list and act using that task's exact id. Each task has a createdAt timestamp; the most recently added task has the largest createdAt. Keep conversational responses concise, suitable for TTS."
+        content: "You are a helpful voice assistant. You manage a simple todo list AND answer questions from a knowledge base. Use tool calls to read (listTasks) and change the list (addTask, completeTask, updateTask, deleteTask) — never claim to have done so without a tool call. When the user asks a question that is not about the todo list, call searchKnowledge to retrieve relevant information and answer based ONLY on what it returns; if it returns nothing relevant, say you don't have that information. When the user refers to a task by wording or position (e.g. 'the last one', 'the latest item', 'the coffee task'), match it against the current list and act using that task's exact id. Each task has a createdAt timestamp; the most recently added task has the largest createdAt. Keep conversational responses concise, suitable for TTS."
       },
       {
         role: "user",
@@ -120,6 +123,22 @@ export async function POST(req: NextRequest) {
       }
     });
 
+    // Knowledge-base retrieval (RAG over Chroma Cloud).
+    tools.push({
+      type: "function",
+      function: {
+        name: "searchKnowledge",
+        description: "Search the knowledge base to answer the user's question. Use this for any informational question that isn't about managing the todo list. Returns relevant passages; answer only from them.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "The search query — usually the user's question" }
+          },
+          required: ["query"]
+        }
+      }
+    });
+
     let response = await openai.chat.completions.create({
       model: "gpt-5.4-mini-2026-03-17",
       messages,
@@ -161,6 +180,15 @@ export async function POST(req: NextRequest) {
           const len = currentTodos.length;
           currentTodos = currentTodos.filter((t: any) => t.id !== args.id);
           result = currentTodos.length < len ? `Deleted task ID ${args.id}` : `Task ID ${args.id} not found`;
+        } else if (name === "searchKnowledge") {
+          try {
+            const hits = await searchKnowledge(KB_NAMESPACE, openai, args.query || "");
+            result = hits.length
+              ? JSON.stringify(hits.map((h) => ({ title: h.title, text: h.text })))
+              : "No relevant information found in the knowledge base.";
+          } catch (e: any) {
+            result = `Knowledge base unavailable: ${e.message}`;
+          }
         }
 
         messages.push({

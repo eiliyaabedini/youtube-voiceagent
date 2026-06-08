@@ -48,10 +48,33 @@ every request via the `x-openai-key` header. The route reads it at the top of
 `POST` and returns **401** if missing/invalid — the client reopens Settings on 401.
 On first load with no key, the Settings modal opens automatically.
 
+## Knowledge base (RAG over Chroma Cloud)
+
+All three agents (chained voice, avatar, realtime) can answer questions from a
+knowledge base via a `searchKnowledge` tool. Knowledge is stored in **Chroma
+Cloud**, sharded one collection per namespace (`knowledge_<namespace>`; the demo
+uses a single `default` namespace). Dense vectors are produced by OpenAI
+**`text-embedding-3-small`** and stored as pre-computed embeddings (no
+Chroma-side embedding function). Documents over Chroma's 16 KiB limit are
+line-chunked; search de-duplicates chunks of the same source via **GroupBy**.
+
+- `app/lib/chroma.ts` — CloudClient, get-or-create collection, chunking,
+  `indexDocuments`, `searchKnowledge`, `listKnowledgeSources`.
+- `app/api/knowledge/route.ts` — `POST` add knowledge, `GET` list sources.
+- `app/api/knowledge/search/route.ts` — `POST` search (used by the realtime
+  agent, whose tool calls run in the browser).
+- The chained/avatar routes call `searchKnowledge` server-side; the realtime
+  client (`app/lib/realtime.ts`) calls `/api/knowledge/search`.
+- `scripts/migrate-to-chroma.mjs` — seed/migrate: `node --env-file=.env.local
+  scripts/migrate-to-chroma.mjs` (reads `scripts/seed-knowledge/*.{txt,md}` or a
+  built-in sample corpus).
+- Env: `CHROMA_API_KEY`, `CHROMA_TENANT`, `CHROMA_DATABASE` in `.env.local`.
+
 ## Key files
 
 - `app/page.tsx` — entire client UI: mic recording, manual task CRUD, Settings
-  modal (key entry/show/clear), recognized-speech and agent-response panels.
+  modal (key entry/show/clear), recognized-speech/agent-response panels,
+  Knowledge Base add/list section.
 - `app/api/voice-agent/route.ts` — the voice pipeline (transcribe → tool-call → TTS).
 - `app/layout.tsx` — root layout, Geist fonts.
 - `vercel.json` — Vercel framework/build pin.
