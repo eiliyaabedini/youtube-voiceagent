@@ -9,6 +9,7 @@ const REALTIME_INSTRUCTIONS = [
   "Whenever the user asks what is on the list, or refers to a task by its wording or position (e.g. 'the last one', 'the latest item', 'the coffee task'), first call listTasks to get the current items, then act using the matching task's exact id.",
   "Each task has an 'addedAt' timestamp; the most recently added task is the one with the latest addedAt (the last entry returned by listTasks).",
   "Use completeTask to mark done, updateTask to change a task's wording, and deleteTask to remove one — all by id.",
+  "You also have a knowledge base: for any question that is not about managing the todo list, call searchKnowledge and answer based only on what it returns. If it returns nothing relevant, say you don't have that information.",
   "Keep spoken replies short, natural, and conversational — one or two sentences.",
 ].join(" ");
 
@@ -69,6 +70,19 @@ const REALTIME_TOOLS = [
         id: { type: "string", description: "The unique ID of the todo item" },
       },
       required: ["id"],
+    },
+  },
+  {
+    type: "function" as const,
+    name: "searchKnowledge",
+    description:
+      "Search the knowledge base to answer the user's question. Use this for any informational question that isn't about managing the todo list. Returns relevant passages; answer only from them.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query — usually the user's question" },
+      },
+      required: ["query"],
     },
   },
 ];

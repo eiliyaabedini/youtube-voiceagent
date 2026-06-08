@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2, Settings, Key, X, Eye, EyeOff, ExternalLink, Radio, Video, Power } from "lucide-react";
+import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2, Settings, Key, X, Eye, EyeOff, ExternalLink, Radio, Video, Power, BookOpen } from "lucide-react";
 import { connectRealtime, RealtimeAuthError, type Todo, type RealtimeController, type RealtimeStatus } from "./lib/realtime";
 import { connectAvatar, AvatarAuthError, type AvatarController, type AvatarStatus } from "./lib/avatar";
 import { connectTranscribe, TranscribeAuthError, type TranscribeController } from "./lib/transcribe";
@@ -34,6 +34,11 @@ export default function Home() {
   const [avStatus, setAvStatus] = useState<AvatarStatus>("idle");
   const [avListening, setAvListening] = useState(false);
   const [txReady, setTxReady] = useState(false);
+  const [kbTitle, setKbTitle] = useState("");
+  const [kbText, setKbText] = useState("");
+  const [kbSources, setKbSources] = useState<{ sourceId: string; title: string; chunks: number }[]>([]);
+  const [kbBusy, setKbBusy] = useState(false);
+  const [kbMsg, setKbMsg] = useState("");
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -370,6 +375,53 @@ export default function Home() {
     setTodos(todos.filter(t => t.id !== id));
   };
 
+  // Knowledge base: load the indexed sources, and add new knowledge (chunked + embedded
+  // server-side into Chroma Cloud). All three agents can then answer from it via RAG.
+  const loadKnowledge = async () => {
+    try {
+      const res = await fetch("/api/knowledge");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.sources)) setKbSources(data.sources);
+    } catch {
+      /* Chroma not configured yet — leave the list empty. */
+    }
+  };
+
+  useEffect(() => { loadKnowledge(); }, []);
+
+  const addKnowledge = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!kbText.trim()) return;
+    if (!apiKey) {
+      setKbMsg("Add your OpenAI API key in Settings first.");
+      openSettings();
+      return;
+    }
+    setKbBusy(true);
+    setKbMsg("");
+    try {
+      const res = await fetch("/api/knowledge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-openai-key": apiKey },
+        body: JSON.stringify({ title: kbTitle.trim(), text: kbText.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setKbMsg(data.error || "Failed to add knowledge.");
+      } else {
+        setKbMsg(`Added "${data.title}" (${data.chunks} chunk${data.chunks === 1 ? "" : "s"}).`);
+        setKbTitle("");
+        setKbText("");
+        loadKnowledge();
+      }
+    } catch (err: any) {
+      setKbMsg(err.message || "Failed to add knowledge.");
+    } finally {
+      setKbBusy(false);
+    }
+  };
+
   const rtConnecting = rtStatus === "connecting";
   const rtActive = rtStatus === "live" || rtStatus === "speaking";
   const avConnecting = avStatus === "connecting";
@@ -697,6 +749,68 @@ export default function Home() {
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        {/* Knowledge Base — RAG source documents (Chroma Cloud) */}
+        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-slate-200 flex items-center gap-2">
+              <BookOpen className="h-5 w-5 text-emerald-400" />
+              Knowledge Base
+            </h2>
+            <span className="text-xs bg-slate-800 text-slate-400 px-2.5 py-1 rounded-full font-medium">
+              {kbSources.length} source{kbSources.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 -mt-2">
+            Add knowledge here, then ask any agent a question — it answers from these docs via RAG.
+          </p>
+
+          <form onSubmit={addKnowledge} className="flex flex-col gap-2">
+            <input
+              type="text"
+              value={kbTitle}
+              onChange={(e) => setKbTitle(e.target.value)}
+              placeholder="Title (optional)"
+              className="bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-4 py-2.5 text-sm outline-none transition"
+            />
+            <textarea
+              value={kbText}
+              onChange={(e) => setKbText(e.target.value)}
+              placeholder="Paste knowledge text the agents should be able to answer from..."
+              rows={4}
+              className="bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-4 py-2.5 text-sm outline-none transition resize-y"
+            />
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-slate-500">{kbMsg}</span>
+              <button
+                type="submit"
+                disabled={kbBusy || !kbText.trim()}
+                className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold rounded-xl px-5 py-2.5 transition shrink-0 flex items-center gap-2"
+              >
+                {kbBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookOpen className="h-4 w-4" />}
+                {kbBusy ? "Indexing..." : "Add Knowledge"}
+              </button>
+            </div>
+          </form>
+
+          <div className="flex flex-col gap-2 mt-1">
+            {kbSources.length === 0 ? (
+              <p className="text-slate-500 text-sm text-center py-4">No knowledge yet. Add a document above.</p>
+            ) : (
+              kbSources.map((s) => (
+                <div
+                  key={s.sourceId}
+                  className="flex items-center justify-between p-3 rounded-xl border bg-slate-950 border-slate-800/80 text-slate-200"
+                >
+                  <span className="text-sm truncate mr-4">{s.title}</span>
+                  <span className="text-[10px] uppercase font-mono bg-slate-900 px-2 py-0.5 rounded text-slate-500 shrink-0">
+                    {s.chunks} chunk{s.chunks === 1 ? "" : "s"}
+                  </span>
                 </div>
               ))
             )}

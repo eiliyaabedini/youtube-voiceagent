@@ -53,13 +53,32 @@ export function summarizeTodos(todos: Todo[]): string {
 
 // Apply a tool call to the current list and return a human-readable result string
 // (mirrors the server-side logic in app/api/voice-agent/route.ts).
-function executeTool(
+async function executeTool(
   name: string,
   args: any,
+  apiKey: string,
   getTodos: () => Todo[],
   setTodos: (todos: Todo[]) => void
-): string {
+): Promise<string> {
   const todos = getTodos();
+
+  if (name === "searchKnowledge") {
+    try {
+      const res = await fetch("/api/knowledge/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-openai-key": apiKey },
+        body: JSON.stringify({ query: args.query || "" }),
+      });
+      if (!res.ok) return "The knowledge base is currently unavailable.";
+      const data = await res.json();
+      const hits = Array.isArray(data.hits) ? data.hits : [];
+      return hits.length
+        ? JSON.stringify(hits.map((h: any) => ({ title: h.title, text: h.text })))
+        : "No relevant information found in the knowledge base.";
+    } catch {
+      return "The knowledge base is currently unavailable.";
+    }
+  }
 
   if (name === "listTasks") {
     return summarizeTodos(todos);
@@ -151,8 +170,9 @@ export async function connectRealtime(opts: RealtimeOptions): Promise<RealtimeCo
         } catch {
           args = {};
         }
-        const result = executeTool(msg.name, args, getTodos, setTodos);
-        sendToolResult(msg.call_id, result);
+        executeTool(msg.name, args, apiKey, getTodos, setTodos).then((result) =>
+          sendToolResult(msg.call_id, result)
+        );
         break;
       }
       case "conversation.item.input_audio_transcription.completed": {
