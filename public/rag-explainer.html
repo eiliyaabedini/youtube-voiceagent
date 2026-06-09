@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VoiceTodo · RAG System Explainer</title>
+<style>
+  :root {
+    --bg: #020617;
+    --panel: #0f172a;
+    --panel2: #1e293b;
+    --border: #1e293b;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --indigo: #6366f1;
+    --emerald: #10b981;
+    --cyan: #06b6d4;
+    --amber: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(1200px 600px at 50% -10%, #0b1220 0%, var(--bg) 60%);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 28px 20px 60px;
+  }
+  header {
+    max-width: 1180px;
+    margin: 0 auto 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+  h1 {
+    font-size: 26px;
+    margin: 0;
+    background: linear-gradient(90deg, #818cf8, #c084fc 60%, #34d399);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    font-weight: 800;
+  }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+  button.flow {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    padding: 10px 16px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: .2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  button.flow:hover { border-color: #475569; }
+  button.flow.active-index { background: var(--emerald); border-color: var(--emerald); color: #042f1f; }
+  button.flow.active-query { background: var(--indigo); border-color: var(--indigo); color: #fff; }
+  button.ghost { background: transparent; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+  .stage {
+    max-width: 1180px;
+    margin: 0 auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 26px 22px;
+  }
+  .lane-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    margin: 0 0 14px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .lane-label b { color: var(--text); }
+  .pipe {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .node {
+    flex: 1 1 0;
+    min-width: 150px;
+    background: var(--panel2);
+    border: 1px solid #273449;
+    border-radius: 16px;
+    padding: 16px 14px;
+    text-align: center;
+    cursor: pointer;
+    transition: .25s;
+    position: relative;
+    opacity: .45;
+    filter: grayscale(.4);
+  }
+  .node .icon { font-size: 26px; line-height: 1; }
+  .node .title { font-weight: 700; font-size: 14px; margin-top: 8px; }
+  .node .tag { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .node.on { opacity: 1; filter: none; transform: translateY(-3px); box-shadow: 0 10px 30px -12px rgba(0,0,0,.7); }
+  .node.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 12px 30px -10px var(--accent); }
+  .node.on .title { color: var(--accent); }
+  .arrow {
+    flex: 0 0 30px;
+    align-self: center;
+    text-align: center;
+    color: #334155;
+    font-size: 22px;
+    transition: .25s;
+  }
+  .arrow.on { color: var(--accent); }
+
+  .lane { --accent: var(--emerald); margin-bottom: 26px; }
+  .lane.query { --accent: var(--indigo); margin-bottom: 0; }
+
+  .detail {
+    max-width: 1180px;
+    margin: 18px auto 0;
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 16px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px 20px;
+  }
+  .card h3 { margin: 0 0 6px; font-size: 16px; display:flex; align-items:center; gap:8px; }
+  .card p { color: #cbd5e1; font-size: 14px; line-height: 1.6; margin: 8px 0; }
+  .chip { display:inline-block; font-size:11px; padding:3px 9px; border-radius:999px; background:#0b3b2e; color:#6ee7b7; margin-right:6px; }
+  .chip.i { background:#1e1b4b; color:#a5b4fc; }
+  pre {
+    background: #020617;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    font-size: 12px;
+    line-height: 1.55;
+    overflow-x: auto;
+    color: #cbd5e1;
+    margin: 0;
+  }
+  pre .k { color: #c084fc; }
+  pre .s { color: #6ee7b7; }
+  pre .c { color: #64748b; font-style: italic; }
+  .step-nav { display:flex; gap:10px; margin-top:14px; align-items:center; }
+  .step-nav button {
+    border:1px solid var(--border); background:var(--panel2); color:var(--text);
+    width:40px; height:40px; border-radius:12px; font-size:18px; cursor:pointer; transition:.2s;
+  }
+  .step-nav button:hover { border-color:#475569; }
+  .step-nav .count { color: var(--muted); font-size:13px; }
+  .legend { max-width:1180px; margin: 22px auto 0; color: var(--muted); font-size:12px; display:flex; gap:18px; flex-wrap:wrap; }
+  .legend span { display:flex; align-items:center; gap:6px; }
+  .swatch { width:12px; height:12px; border-radius:4px; }
+  @keyframes pulse { 0%,100%{ transform:scale(1);} 50%{ transform:scale(1.06);} }
+  .node.active .icon { animation: pulse 1.1s ease-in-out infinite; }
+  @media (max-width: 820px){ .detail{ grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>VoiceTodo · How the RAG System Works</h1>
+      <div class="sub">Voice agent + knowledge base · OpenAI <code>text-embedding-3-small</code> + Chroma Cloud</div>
+    </div>
+    <div class="controls">
+      <button class="flow active-index" id="btnIndex"><span class="dot"></span> Indexing flow</button>
+      <button class="flow active-query" id="btnQuery"><span class="dot"></span> Query flow (RAG)</button>
+      <button class="flow ghost" id="btnPlay">▶ Auto-play</button>
+    </div>
+  </header>
+
+  <div class="stage">
+    <!-- INDEXING LANE -->
+    <div class="lane index" id="laneIndex">
+      <p class="lane-label"><span class="swatch" style="background:var(--emerald)"></span> <b>Indexing</b> — you add knowledge (runs once per document)</p>
+      <div class="pipe" id="pipeIndex"></div>
+    </div>
+    <!-- QUERY LANE -->
+    <div class="lane query" id="laneQuery">
+      <p class="lane-label"><span class="swatch" style="background:var(--indigo)"></span> <b>Query</b> — an agent answers a question with RAG</p>
+      <div class="pipe" id="pipeQuery"></div>
+    </div>
+  </div>
+
+  <div class="detail">
+    <div class="card">
+      <h3 id="dTitle">Click any box, or press ▶ Auto-play</h3>
+      <p id="dBody">Each box is one real step in the pipeline. The two lanes share the same embedding model so a question lands near the chunks that answer it.</p>
+      <div id="dChips"></div>
+      <div class="step-nav">
+        <button id="prev">‹</button>
+        <button id="next">›</button>
+        <span class="count" id="count"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>🧩 Under the hood</h3>
+      <pre id="code"><span class="c">// pick a step to see its code</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><span class="swatch" style="background:var(--emerald)"></span> Indexing (write path)</span>
+    <span><span class="swatch" style="background:var(--indigo)"></span> Query (read path / RAG)</span>
+    <span><span class="swatch" style="background:var(--amber)"></span> Vectors live in Chroma Cloud</span>
+  </div>
+
+<script>
+const INDEX = [
+  { icon:"📝", title:"Add knowledge", tag:"UI form", accent:"e",
+    body:"You paste text in the Knowledge Base panel (or run the migrate script). The browser POSTs it to /api/knowledge with your OpenAI key.",
+    chips:[["e","app/page.tsx"],["e","POST /api/knowledge"]],
+    code:`<span class="k">await</span> fetch(<span class="s">"/api/knowledge"</span>, {\n  method: <span class="s">"POST"</span>,\n  headers: { <span class="s">"x-openai-key"</span>: apiKey },\n  body: JSON.stringify({ title, text }),\n});` },
+  { icon:"✂️", title:"Chunk", tag:"< 16 KiB / piece", accent:"e",
+    body:"Chroma caps a document at 16 KiB. Long text is split line-by-line into chunks, each tagged with its source id + chunk index so we can de-dupe later.",
+    chips:[["e","chunkDocument()"],["e","sourceId + chunkIndex"]],
+    code:`<span class="k">for</span> (<span class="k">const</span> line <span class="k">of</span> lines) {\n  <span class="c">// accumulate until ~12 KiB, then flush a chunk</span>\n}\nreturn chunks.map((document, chunkIndex) => ({\n  id: <span class="s">\`\${doc.id}::\${chunkIndex}\`</span>,\n  document,\n  metadata: { sourceId: doc.id, chunkIndex, title },\n}));` },
+  { icon:"🔢", title:"Embed", tag:"text-embedding-3-small", accent:"e",
+    body:"Each chunk is sent to OpenAI and turned into a vector (a list of ~1536 numbers) that captures its meaning. Similar meaning → nearby vectors.",
+    chips:[["e","OpenAI embeddings"],["e","1 vector / chunk"]],
+    code:`<span class="k">const</span> res = <span class="k">await</span> openai.embeddings.create({\n  model: <span class="s">"text-embedding-3-small"</span>,\n  input: chunks.map(c => c.document),\n});\n<span class="c">// res.data[i].embedding -> number[]</span>` },
+  { icon:"🗄️", title:"Store in Chroma", tag:"vector DB (cloud)", accent:"a",
+    body:"The chunks + their vectors + metadata are upserted into a Chroma Cloud collection. Data is sharded one collection per namespace (user/org).",
+    chips:[["e","collection.add()"],["e","knowledge_<namespace>"]],
+    code:`<span class="k">await</span> collection.add({\n  ids:        records.map(r => r.id),\n  documents:  records.map(r => r.document),\n  metadatas:  records.map(r => r.metadata),\n  embeddings, <span class="c">// pre-computed by OpenAI</span>\n});` },
+];
+
+const QUERY = [
+  { icon:"🎙️", title:"User speaks", tag:"any of 3 agents", accent:"i",
+    body:"In the chained, realtime, or avatar agent you ask a question — e.g. ‘What’s the refund policy?’ Speech becomes text.",
+    chips:[["i","voice / realtime / avatar"]],
+    code:`<span class="c">// transcript -> the model</span>\nuser: <span class="s">"What is the refund policy?"</span>` },
+  { icon:"🧠", title:"Agent decides", tag:"tool call", accent:"i",
+    body:"The model sees it's NOT a todo command, so it calls the searchKnowledge tool instead of guessing — this is what makes the answer grounded.",
+    chips:[["i","tool: searchKnowledge"]],
+    code:`{\n  type: <span class="s">"function"</span>,\n  name: <span class="s">"searchKnowledge"</span>,\n  description: <span class="s">"Search the knowledge base to\n    answer questions not about the todo list."</span>,\n}` },
+  { icon:"🔢", title:"Embed the question", tag:"same model", accent:"i",
+    body:"The question is embedded with the SAME text-embedding-3-small model. Using one model for both sides is why the query vector lands near the right chunks.",
+    chips:[["i","text-embedding-3-small"]],
+    code:`<span class="k">const</span> [queryVector] =\n  <span class="k">await</span> embedTexts(openai, [query]);` },
+  { icon:"🧲", title:"Vector search", tag:"KNN + GroupBy", accent:"i",
+    body:"Chroma finds the nearest chunk vectors (k-nearest-neighbour), then GroupBy collapses multiple chunks of the same document to its single best match.",
+    chips:[["i","Knn"],["i","GroupBy(sourceId)"]],
+    code:`<span class="k">const</span> search = <span class="k">new</span> Search()\n  .rank(Knn({ query: queryVector, limit: 200 }))\n  .groupBy(<span class="k">new</span> GroupBy([K(<span class="s">"sourceId"</span>)],\n            <span class="k">new</span> MinK([K.SCORE], 1)))\n  .limit(5);` },
+  { icon:"📚", title:"Top passages", tag:"the context", accent:"i",
+    body:"Chroma returns the most relevant passages. These are the 'retrieved' part of Retrieval-Augmented Generation — the facts the model is allowed to use.",
+    chips:[["i","hits[] -> title + text"]],
+    code:`<span class="c">// fed back to the model as the tool result</span>\n[{ title: <span class="s">"Refund Policy"</span>,\n   text:  <span class="s">"Full refund within 30 days..."</span> }]` },
+  { icon:"💬", title:"Grounded answer", tag:"+ speech", accent:"i",
+    body:"The model writes a short reply using ONLY those passages, then it's spoken back via TTS. No passages found → it says it doesn't know (no hallucinating).",
+    chips:[["i","answer from context"],["i","TTS"]],
+    code:`<span class="c">// 2nd model call, now with the passages</span>\nassistant: <span class="s">"You can get a full refund\n  within 30 days of purchase."</span>` },
+];
+
+const laneState = { index:true, query:true };
+let seq = [];        // active flattened sequence of {lane,i}
+let pos = -1;
+let timer = null;
+
+function buildPipe(elId, data, laneKey){
+  const el = document.getElementById(elId);
+  el.innerHTML = "";
+  data.forEach((n, i) => {
+    if (i>0){
+      const a = document.createElement("div");
+      a.className = "arrow"; a.textContent = "→";
+      a.dataset.lane = laneKey; a.dataset.arrow = i;
+      el.appendChild(a);
+    }
+    const d = document.createElement("div");
+    d.className = "node";
+    d.dataset.lane = laneKey; d.dataset.i = i;
+    d.innerHTML = `<div class="icon">${n.icon}</div><div class="title">${n.title}</div><div class="tag">${n.tag}</div>`;
+    d.onclick = () => { stop(); selectByNode(laneKey, i); };
+    el.appendChild(d);
+  });
+}
+
+function data(laneKey){ return laneKey==="index" ? INDEX : QUERY; }
+
+function rebuildSeq(){
+  seq = [];
+  if (laneState.index) data("index").forEach((_,i)=>seq.push({lane:"index",i}));
+  if (laneState.query) data("query").forEach((_,i)=>seq.push({lane:"query",i}));
+}
+
+function selectByNode(laneKey, i){
+  rebuildSeq();
+  pos = seq.findIndex(s => s.lane===laneKey && s.i===i);
+  render();
+}
+
+function render(){
+  document.querySelectorAll(".node").forEach(n=>n.classList.remove("active"));
+  document.querySelectorAll(".arrow").forEach(a=>a.classList.remove("on"));
+  // light up every node up to current within shown lanes
+  const cur = seq[pos];
+  document.querySelectorAll(".node").forEach(n=>{
+    const lane = n.dataset.lane, i = +n.dataset.i;
+    const laneShown = laneState[lane];
+    n.style.display = laneShown ? "" : "none";
+    let on = false;
+    if (cur && lane===cur.lane && i<=cur.i) on = true;
+    n.classList.toggle("on", on);
+  });
+  document.querySelectorAll(".arrow").forEach(a=>{
+    const lane = a.dataset.lane, idx = +a.dataset.arrow;
+    a.style.display = laneState[lane] ? "" : "none";
+    if (cur && lane===cur.lane && idx<=cur.i) a.classList.add("on");
+  });
+  if (cur){
+    const node = document.querySelector(`.node[data-lane="${cur.lane}"][data-i="${cur.i}"]`);
+    if (node) node.classList.add("active");
+    const d = data(cur.lane)[cur.i];
+    document.getElementById("dTitle").innerHTML = `${d.icon} ${d.title}`;
+    document.getElementById("dBody").textContent = d.body;
+    document.getElementById("dChips").innerHTML = d.chips.map(c=>`<span class="chip ${c[0]}">${c[1]}</span>`).join("");
+    document.getElementById("code").innerHTML = d.code;
+    document.getElementById("count").textContent = `${pos+1} / ${seq.length}`;
+  }
+}
+
+function step(dir){
+  rebuildSeq();
+  if (!seq.length) return;
+  pos = (pos + dir + seq.length) % seq.length;
+  render();
+}
+function stop(){ if(timer){ clearInterval(timer); timer=null; document.getElementById("btnPlay").textContent="▶ Auto-play"; } }
+function play(){
+  if (timer){ stop(); return; }
+  rebuildSeq(); if(!seq.length) return;
+  if (pos<0) pos=0; render();
+  document.getElementById("btnPlay").textContent="⏸ Pause";
+  timer = setInterval(()=>{
+    pos++;
+    if (pos>=seq.length){ pos=0; }
+    render();
+  }, 2300);
+}
+
+function toggleLane(key, btn, cls){
+  laneState[key] = !laneState[key];
+  btn.classList.toggle(cls, laneState[key]);
+  document.getElementById(key==="index"?"laneIndex":"laneQuery").style.display = laneState[key] ? "" : "none";
+  rebuildSeq();
+  if (pos>=seq.length) pos = seq.length-1;
+  render();
+}
+
+document.getElementById("btnIndex").onclick = (e)=>{ stop(); toggleLane("index", e.currentTarget, "active-index"); };
+document.getElementById("btnQuery").onclick = (e)=>{ stop(); toggleLane("query", e.currentTarget, "active-query"); };
+document.getElementById("btnPlay").onclick = play;
+document.getElementById("next").onclick = ()=>{ stop(); step(1); };
+document.getElementById("prev").onclick = ()=>{ stop(); step(-1); };
+document.addEventListener("keydown", e=>{
+  if(e.key==="ArrowRight"){ stop(); step(1); }
+  if(e.key==="ArrowLeft"){ stop(); step(-1); }
+  if(e.key===" "){ e.preventDefault(); play(); }
+});
+
+buildPipe("pipeIndex", INDEX, "index");
+buildPipe("pipeQuery", QUERY, "query");
+rebuildSeq();
+render();
+</script>
+</body>
+</html>

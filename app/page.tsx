@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2, Settings, Key, X, Eye, EyeOff, ExternalLink, Radio, Video, Power, BookOpen } from "lucide-react";
+import { Mic, Square, Trash2, CheckCircle2, Circle, Loader2, Sparkles, Volume2, Settings, Key, X, Eye, EyeOff, ExternalLink, Radio, Video, Power, BookOpen, HelpCircle } from "lucide-react";
 import { connectRealtime, RealtimeAuthError, type Todo, type RealtimeController, type RealtimeStatus } from "./lib/realtime";
 import { connectAvatar, AvatarAuthError, type AvatarController, type AvatarStatus } from "./lib/avatar";
 import { connectTranscribe, TranscribeAuthError, type TranscribeController } from "./lib/transcribe";
@@ -761,6 +761,15 @@ export default function Home() {
             <h2 className="text-lg font-semibold text-slate-200 flex items-center gap-2">
               <BookOpen className="h-5 w-5 text-emerald-400" />
               Knowledge Base
+              <a
+                href="/rag-explainer.html"
+                target="_blank"
+                rel="noopener noreferrer"
+                title="How does this work? Open the interactive RAG tutorial"
+                className="text-slate-500 hover:text-emerald-400 transition"
+              >
+                <HelpCircle className="h-4 w-4" />
+              </a>
             </h2>
             <span className="text-xs bg-slate-800 text-slate-400 px-2.5 py-1 rounded-full font-medium">
               {kbSources.length} source{kbSources.length === 1 ? "" : "s"}
